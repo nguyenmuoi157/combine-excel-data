@@ -4,14 +4,16 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import threading
 
-def process_excel_files(folder_path, progress_var, status_label, root):
+# --- LOGIC TAB 1: GỘP EXCEL ---
+def process_excel_files(folder_path, progress_var, status_label, root, btn_start, btn_browse):
     try:
-        # Lấy danh sách các file excel bắt đầu bằng chữ 'iss' (không phân biệt hoa/thường)
         excel_files = [f for f in os.listdir(folder_path) if f.endswith('.xlsx') and f.lower().startswith('iss') and f != 'result.xlsx']
         
         if not excel_files:
-            root.after(0, lambda: messagebox.showinfo("Thông báo", "Không tìm thấy file .xlsx nào trong thư mục!"))
+            root.after(0, lambda: messagebox.showinfo("Thông báo", "Không tìm thấy file .xlsx nào bắt đầu bằng 'iss' trong thư mục!"))
             root.after(0, lambda: status_label.config(text="Sẵn sàng"))
+            root.after(0, lambda: btn_start.config(state=tk.NORMAL))
+            root.after(0, lambda: btn_browse.config(state=tk.NORMAL))
             return
 
         all_data = []
@@ -22,60 +24,38 @@ def process_excel_files(folder_path, progress_var, status_label, root):
             file_path = os.path.join(folder_path, file)
             
             try:
-                # Tối ưu 1: Chỉ đọc 2 cột cần thiết (tránh load toàn bộ file rác vào RAM)
-                # Tối ưu 2: Sử dụng engine 'calamine' siêu nhanh và tiết kiệm RAM (gấp 10-20 lần openpyxl)
                 df = pd.read_excel(file_path, usecols=['REF_NO', 'REQUEST_REF_NO'], engine='calamine')
-                
-                # Kiểm tra cột bắt buộc
                 if 'REF_NO' not in df.columns or 'REQUEST_REF_NO' not in df.columns:
-                    print(f"Bỏ qua file {file} vì không có đủ 2 cột REF_NO và REQUEST_REF_NO.")
                     continue
                 
-                # Lấy dữ liệu ở cột REF_NO (những dòng có dữ liệu)
                 ref_data = df[df['REF_NO'].notna()]['REF_NO']
-                
-                # Lấy dữ liệu ở cột REQUEST_REF_NO (khi REF_NO không có dữ liệu)
                 req_data = df[df['REF_NO'].isna()]['REQUEST_REF_NO']
-                
-                # Nối 2 chuỗi dữ liệu này lại với nhau (req_data nằm ngay dưới ref_data)
-                combined = pd.concat([ref_data, req_data], ignore_index=True)
-                
-                # Xoá những dòng trống (nếu cả 2 đều trống)
-                combined = combined.dropna()
-                
+                combined = pd.concat([ref_data, req_data], ignore_index=True).dropna()
                 all_data.append(combined)
             except Exception as e:
                 print(f"Lỗi khi đọc file {file}: {e}")
             
-            # Cập nhật tiến trình
-            progress = ((idx + 1) / total_files) * 50 # 50% quá trình là đọc file
+            progress = ((idx + 1) / total_files) * 50
             root.after(0, lambda p=progress: progress_var.set(p))
             
         if not all_data:
             root.after(0, lambda: messagebox.showinfo("Thông báo", "Không có dữ liệu hợp lệ nào được tìm thấy."))
             root.after(0, lambda: status_label.config(text="Sẵn sàng"))
             root.after(0, lambda: progress_var.set(0))
+            root.after(0, lambda: btn_start.config(state=tk.NORMAL))
+            root.after(0, lambda: btn_browse.config(state=tk.NORMAL))
             return
 
         root.after(0, lambda: status_label.config(text="Đang gộp dữ liệu..."))
-        
-        # Gộp tất cả dữ liệu từ các file lại thành 1 Series lớn
         final_series = pd.concat(all_data, ignore_index=True)
         final_df = pd.DataFrame({'COMBINED_REF': final_series})
-        
-        # Thêm cột bên cạnh lấy phần trước chữ 'FT'
         final_df['PREFIX_FT'] = final_df['COMBINED_REF'].astype(str).apply(lambda x: x.split('FT')[0] if 'FT' in x else '')
                 
         root.after(0, lambda: status_label.config(text="Đang ghi ra file result.xlsx..."))
-        
-        # Đường dẫn file kết quả
         result_path = os.path.join(folder_path, 'result.xlsx')
-        
-        # Giới hạn dòng mỗi sheet
         max_rows_per_sheet = 1_000_000
         total_rows = len(final_df)
         
-        # Ghi ra file Excel, hỗ trợ chia sheet
         with pd.ExcelWriter(result_path, engine='openpyxl') as writer:
             if total_rows == 0:
                 final_df.to_excel(writer, sheet_name='Sheet1', index=False)
@@ -85,11 +65,8 @@ def process_excel_files(folder_path, progress_var, status_label, root):
                     start_row = i * max_rows_per_sheet
                     end_row = min((i + 1) * max_rows_per_sheet, total_rows)
                     chunk = final_df.iloc[start_row:end_row]
-                    
                     sheet_name = f'Sheet{i+1}'
                     chunk.to_excel(writer, sheet_name=sheet_name, index=False)
-                    
-                    # Cập nhật tiến trình phần ghi file (50% còn lại)
                     progress = 50 + ((i + 1) / num_sheets) * 50
                     root.after(0, lambda p=progress: progress_var.set(p))
         
@@ -101,65 +78,152 @@ def process_excel_files(folder_path, progress_var, status_label, root):
         root.after(0, lambda err=e: messagebox.showerror("Lỗi", f"Đã xảy ra lỗi:\n{err}"))
         root.after(0, lambda: status_label.config(text="Sẵn sàng"))
         root.after(0, lambda: progress_var.set(0))
+    finally:
+        root.after(0, lambda: btn_start.config(state=tk.NORMAL))
+        root.after(0, lambda: btn_browse.config(state=tk.NORMAL))
 
-def browse_folder():
-    folder_selected = filedialog.askdirectory()
-    if folder_selected:
-        folder_path_var.set(folder_selected)
 
-def start_processing():
-    folder = folder_path_var.get()
-    if not folder or not os.path.isdir(folder):
-        messagebox.showwarning("Cảnh báo", "Vui lòng chọn một thư mục hợp lệ.")
-        return
+# --- LOGIC TAB 2: NỐI FILE DAT ---
+def process_dat_files(files_tuple, progress_var, status_label, root, btn_start, btn_browse):
+    try:
+        files = list(files_tuple)
+        if not files:
+            root.after(0, lambda: status_label.config(text="Sẵn sàng"))
+            root.after(0, lambda: btn_start.config(state=tk.NORMAL))
+            root.after(0, lambda: btn_browse.config(state=tk.NORMAL))
+            return
+            
+        total_files = len(files)
+        # Lưu file kết quả ở cùng thư mục với file đầu tiên được chọn
+        output_dir = os.path.dirname(files[0])
+        output_file = os.path.join(output_dir, 'combined_result.dat')
         
-    progress_var.set(0)
-    btn_start.config(state=tk.DISABLED)
-    btn_browse.config(state=tk.DISABLED)
+        with open(output_file, 'w', encoding='utf-8') as outfile:
+            for idx, file in enumerate(files):
+                root.after(0, lambda f=os.path.basename(file): status_label.config(text=f"Đang xử lý: {f}..."))
+                
+                with open(file, 'r', encoding='utf-8') as infile:
+                    for line_num, line in enumerate(infile):
+                        # Giữ lại Header (dòng bắt đầu bằng HR) nếu là file đầu tiên, bỏ qua nếu là các file sau
+                        if line.startswith('HR'):
+                            if idx == 0:
+                                outfile.write(line)
+                            else:
+                                continue # Bỏ qua header của file thứ 2 trở đi
+                        else:
+                            outfile.write(line)
+                
+                progress = ((idx + 1) / total_files) * 100
+                root.after(0, lambda p=progress: progress_var.set(p))
+                
+        root.after(0, lambda: progress_var.set(100))
+        root.after(0, lambda: status_label.config(text="Hoàn thành!"))
+        root.after(0, lambda: messagebox.showinfo("Thành công", f"Đã nối xong các file .dat!\nFile kết quả: {output_file}"))
+        
+    except Exception as e:
+        root.after(0, lambda err=e: messagebox.showerror("Lỗi", f"Đã xảy ra lỗi:\n{err}"))
+        root.after(0, lambda: status_label.config(text="Sẵn sàng"))
+        root.after(0, lambda: progress_var.set(0))
+    finally:
+        root.after(0, lambda: btn_start.config(state=tk.NORMAL))
+        root.after(0, lambda: btn_browse.config(state=tk.NORMAL))
+
+# --- GIAO DIỆN GUI ---
+def setup_gui():
+    root = tk.Tk()
+    root.title("Công cụ Xử lý Dữ liệu")
+    root.geometry("550x300")
+    root.resizable(False, False)
+
+    notebook = ttk.Notebook(root)
+    notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+    # --- TAB 1: EXCEL ---
+    tab1 = ttk.Frame(notebook)
+    notebook.add(tab1, text="Gộp Excel (REF_NO)")
     
-    # Chạy xử lý trong một thread riêng để không block giao diện
-    thread = threading.Thread(target=run_process_thread, args=(folder,))
-    thread.daemon = True
-    thread.start()
+    t1_folder_var = tk.StringVar()
+    t1_progress_var = tk.DoubleVar()
 
-def run_process_thread(folder):
-    process_excel_files(folder, progress_var, status_label, root)
-    root.after(0, lambda: btn_start.config(state=tk.NORMAL))
-    root.after(0, lambda: btn_browse.config(state=tk.NORMAL))
+    def t1_browse():
+        folder = filedialog.askdirectory()
+        if folder:
+            t1_folder_var.set(folder)
 
-# --- Cài đặt Giao diện GUI ---
-root = tk.Tk()
-root.title("Công cụ Gộp dữ liệu Excel (REF_NO)")
-root.geometry("500x250")
-root.resizable(False, False)
+    def t1_start():
+        folder = t1_folder_var.get()
+        if not folder or not os.path.isdir(folder):
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn một thư mục hợp lệ.")
+            return
+            
+        t1_progress_var.set(0)
+        t1_btn_start.config(state=tk.DISABLED)
+        t1_btn_browse.config(state=tk.DISABLED)
+        
+        thread = threading.Thread(target=process_excel_files, args=(folder, t1_progress_var, t1_status, root, t1_btn_start, t1_btn_browse))
+        thread.daemon = True
+        thread.start()
 
-# Biến lưu trữ
-folder_path_var = tk.StringVar()
-progress_var = tk.DoubleVar()
+    tk.Label(tab1, text="Chọn thư mục chứa các file Excel (.xlsx):", anchor="w").pack(fill=tk.X, padx=10, pady=(10, 5))
+    
+    t1_frame_folder = tk.Frame(tab1)
+    t1_frame_folder.pack(fill=tk.X, padx=10, pady=(0, 15))
+    tk.Entry(t1_frame_folder, textvariable=t1_folder_var, state='readonly', width=45).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+    t1_btn_browse = tk.Button(t1_frame_folder, text="Chọn thư mục", command=t1_browse)
+    t1_btn_browse.pack(side=tk.RIGHT)
+    
+    t1_btn_start = tk.Button(tab1, text="Bắt đầu gộp dữ liệu", command=t1_start, height=2, bg="#4CAF50", fg="black")
+    t1_btn_start.pack(fill=tk.X, padx=10, pady=(0, 15))
+    
+    ttk.Progressbar(tab1, variable=t1_progress_var, maximum=100).pack(fill=tk.X, padx=10, pady=(0, 10))
+    t1_status = tk.Label(tab1, text="Sẵn sàng", fg="blue", anchor="w")
+    t1_status.pack(fill=tk.X, padx=10)
 
-# Giao diện chính
-frame = tk.Frame(root, padx=20, pady=20)
-frame.pack(fill=tk.BOTH, expand=True)
 
-lbl_instruct = tk.Label(frame, text="Chọn thư mục chứa các file Excel (.xlsx):", anchor="w")
-lbl_instruct.pack(fill=tk.X, pady=(0, 5))
+    # --- TAB 2: NỐI FILE DAT ---
+    tab2 = ttk.Frame(notebook)
+    notebook.add(tab2, text="Nối File .DAT")
+    
+    t2_files_var = tk.StringVar()
+    t2_progress_var = tk.DoubleVar()
+    t2_selected_files = []
 
-frame_folder = tk.Frame(frame)
-frame_folder.pack(fill=tk.X, pady=(0, 15))
+    def t2_browse():
+        files = filedialog.askopenfilenames(filetypes=[("DAT files", "*.dat"), ("All files", "*.*")])
+        if files:
+            nonlocal t2_selected_files
+            t2_selected_files = files
+            t2_files_var.set(f"Đã chọn {len(files)} file")
 
-entry_folder = tk.Entry(frame_folder, textvariable=folder_path_var, state='readonly', width=45)
-entry_folder.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+    def t2_start():
+        if not t2_selected_files:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn các file cần gộp.")
+            return
+            
+        t2_progress_var.set(0)
+        t2_btn_start.config(state=tk.DISABLED)
+        t2_btn_browse.config(state=tk.DISABLED)
+        
+        thread = threading.Thread(target=process_dat_files, args=(t2_selected_files, t2_progress_var, t2_status, root, t2_btn_start, t2_btn_browse))
+        thread.daemon = True
+        thread.start()
 
-btn_browse = tk.Button(frame_folder, text="Chọn thư mục", command=browse_folder)
-btn_browse.pack(side=tk.RIGHT)
+    tk.Label(tab2, text="Chọn các file .dat cần nối:", anchor="w").pack(fill=tk.X, padx=10, pady=(10, 5))
+    
+    t2_frame_files = tk.Frame(tab2)
+    t2_frame_files.pack(fill=tk.X, padx=10, pady=(0, 15))
+    tk.Entry(t2_frame_files, textvariable=t2_files_var, state='readonly', width=45).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+    t2_btn_browse = tk.Button(t2_frame_files, text="Chọn các file", command=t2_browse)
+    t2_btn_browse.pack(side=tk.RIGHT)
+    
+    t2_btn_start = tk.Button(tab2, text="Bắt đầu nối file", command=t2_start, height=2, bg="#4CAF50", fg="black")
+    t2_btn_start.pack(fill=tk.X, padx=10, pady=(0, 15))
+    
+    ttk.Progressbar(tab2, variable=t2_progress_var, maximum=100).pack(fill=tk.X, padx=10, pady=(0, 10))
+    t2_status = tk.Label(tab2, text="Sẵn sàng", fg="blue", anchor="w")
+    t2_status.pack(fill=tk.X, padx=10)
 
-btn_start = tk.Button(frame, text="Bắt đầu gộp dữ liệu", command=start_processing, height=2, bg="#4CAF50", fg="black")
-btn_start.pack(fill=tk.X, pady=(0, 15))
+    root.mainloop()
 
-progress_bar = ttk.Progressbar(frame, variable=progress_var, maximum=100)
-progress_bar.pack(fill=tk.X, pady=(0, 10))
-
-status_label = tk.Label(frame, text="Sẵn sàng", fg="blue", anchor="w")
-status_label.pack(fill=tk.X)
-
-root.mainloop()
+if __name__ == "__main__":
+    setup_gui()
