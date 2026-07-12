@@ -22,7 +22,9 @@ def process_excel_files(folder_path, progress_var, status_label, root):
             file_path = os.path.join(folder_path, file)
             
             try:
-                df = pd.read_excel(file_path)
+                # Tối ưu 1: Chỉ đọc 2 cột cần thiết (tránh load toàn bộ file rác vào RAM)
+                # Tối ưu 2: Sử dụng engine 'calamine' siêu nhanh và tiết kiệm RAM (gấp 10-20 lần openpyxl)
+                df = pd.read_excel(file_path, usecols=['REF_NO', 'REQUEST_REF_NO'], engine='calamine')
                 
                 # Kiểm tra cột bắt buộc
                 if 'REF_NO' not in df.columns or 'REQUEST_REF_NO' not in df.columns:
